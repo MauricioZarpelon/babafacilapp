@@ -23,7 +23,6 @@ Projeto em desenvolvimento inicial, com estrutura funcional e espaço para evolu
 Disponível em **teste fechado** na Google Play.
 
 ## 🔮 Próximos Passos
-- Autenticação de usuários  
 - Filtros de busca avançados  
 - Avaliações e comentários  
 - Melhorias de interface e usabilidade
