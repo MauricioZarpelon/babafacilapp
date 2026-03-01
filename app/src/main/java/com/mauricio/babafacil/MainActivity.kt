@@ -1,5 +1,6 @@
 package com.mauricio.babafacil
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,88 +8,297 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import coil.compose.rememberAsyncImagePainter
+import com.canhub.cropper.CropImageContract
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageOptions
+import com.canhub.cropper.CropImageView
 import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
 import com.google.firebase.storage.FirebaseStorage
-import java.util.UUID
 import kotlinx.coroutines.delay
+import java.net.URLEncoder
+import java.util.UUID
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FirebaseApp.initializeApp(this)
-        setContent { App() }
+        setContent {
+            MaterialTheme {
+                App()
+            }
+        }
     }
 }
-
-/* ---------------- APP ---------------- */
 
 @Composable
 fun App() {
-    var telaAtual by remember { mutableStateOf("home") }
+    var telaAtual by remember { mutableStateOf("splash") }
+    val auth = FirebaseAuth.getInstance()
 
+    LaunchedEffect(auth.currentUser) {
+        auth.currentUser?.let { user ->
+            verificarTipoUsuario(
+                uid = user.uid,
+                onPai = { telaAtual = "buscar" },
+                onBaba = { telaAtual = "cadastro" },
+                onError = { telaAtual = "home" }
+            )
+        }
+    }
     when (telaAtual) {
+        "splash" -> SplashScreen {
+            telaAtual = if (auth.currentUser == null) "home" else "verificando"
+        }
+
+        "verificando" -> Box(modifier = Modifier.fillMaxSize()) {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        }
+
         "home" -> HomeScreen(
-            onCadastrar = { telaAtual = "cadastro" },
-            onBuscar = { telaAtual = "lista" }
+            onCadastroSucesso = { tipo ->
+                telaAtual = if (tipo == "pai") "buscar" else "cadastro"
+            },
+            onLoginSucesso = { tipo ->
+                telaAtual = if (tipo == "pai") "buscar" else "cadastro"
+            }
         )
 
         "cadastro" -> CadastroBabaScreen(
-            onVoltar = { telaAtual = "home" }
+            onVoltar = {
+                FirebaseAuth.getInstance().signOut()
+                telaAtual = "home"
+            }
         )
 
-        "lista" -> ListaBabasScreen(
-            onVoltar = { telaAtual = "home" }
+        "buscar" -> ListaBabasScreen(
+            onVoltar = {
+                FirebaseAuth.getInstance().signOut()
+                telaAtual = "home"
+            }
         )
     }
 }
 
-/* ---------------- HOME ---------------- */
+@Composable
+fun SplashScreen(onAnimacaoTerminou: () -> Unit) {
+    LaunchedEffect(Unit) {
+        delay(2000)
+        onAnimacaoTerminou()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF6A1B9A)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "BabáFácil",
+                style = MaterialTheme.typography.displayMedium,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(16.dp))
+            CircularProgressIndicator(color = Color.White)
+        }
+    }
+}
 
 @Composable
 fun HomeScreen(
-    onCadastrar: () -> Unit,
-    onBuscar: () -> Unit
+    onCadastroSucesso: (String) -> Unit,
+    onLoginSucesso: (String) -> Unit
 ) {
+    var email by remember { mutableStateOf("") }
+    var senha by remember { mutableStateOf("") }
+    var tipoUsuario by remember { mutableStateOf("pai") }
+    var erro by remember { mutableStateOf("") }
+    var modoLogin by remember { mutableStateOf(false) }
+    var senhaVisivel by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Button(onClick = onCadastrar, modifier = Modifier.fillMaxWidth()) {
-            Text("Cadastrar babá")
+
+        Text(
+            text = if (modoLogin) "Entrar" else "Criar Conta",
+            style = MaterialTheme.typography.headlineMedium,
+            color = Color(0xFF6A1B9A)
+        )
+
+        Spacer(Modifier.height(32.dp))
+
+        if (!modoLogin) {
+            Text("Quem é você?", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(16.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = { tipoUsuario = "pai" },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (tipoUsuario == "pai") Color(0xFF6A1B9A) else Color.Gray
+                    )
+                ) {
+                    Text("Procuro Babá")
+                }
+
+                Button(
+                    onClick = { tipoUsuario = "baba" },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (tipoUsuario == "baba") Color(0xFF6A1B9A) else Color.Gray
+                    )
+                ) {
+                    Text("Sou Babá")
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // EMAIL
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            modifier = Modifier.fillMaxWidth()
+        )
 
-        Button(onClick = onBuscar, modifier = Modifier.fillMaxWidth()) {
-            Text("Encontrar babá")
+        Spacer(Modifier.height(12.dp))
+
+        // SENHA
+        OutlinedTextField(
+            value = senha,
+            onValueChange = { senha = it },
+            label = { Text("Senha") },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = if (senhaVisivel)
+                VisualTransformation.None
+            else
+                PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password
+            ),
+            trailingIcon = {
+                IconButton(onClick = { senhaVisivel = !senhaVisivel }) {
+                    Icon(
+                        imageVector = if (senhaVisivel)
+                            Icons.Default.Visibility
+                        else
+                            Icons.Default.VisibilityOff,
+                        contentDescription = null
+                    )
+                }
+            }
+        )
+
+        if (erro.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                erro,
+                color = Color.Red,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = {
+                if (modoLogin) {
+                    fazerLogin(
+                        email = email,
+                        senha = senha,
+                        onSucesso = { uid ->
+                            verificarTipoUsuario(
+                                uid = uid,
+                                onPai = { onLoginSucesso("pai") },
+                                onBaba = { onLoginSucesso("baba") },
+                                onError = { errorMessage ->
+                                    erro = errorMessage
+                                }
+                            )
+                        },
+                        onErro = { errorMessage ->
+                            erro = errorMessage
+                        }
+                    )
+                } else {
+                    cadastrarUsuario(
+                        email = email,
+                        senha = senha,
+                        tipo = tipoUsuario,
+                        onSucesso = { onCadastroSucesso(tipoUsuario) },
+                        onErro = { errorMessage ->
+                            erro = errorMessage
+                        }
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A1B9A))
+        ) {
+            Text(if (modoLogin) "Entrar" else "Criar conta")
+        }
+
+        TextButton(
+            onClick = { modoLogin = !modoLogin },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                if (modoLogin)
+                    "Não tenho conta? Criar agora"
+                else
+                    "Já tenho conta? Entrar"
+            )
         }
     }
 }
-
-/* ---------------- CADASTRO ---------------- */
-
 @Composable
-fun CadastroBabaScreen(
-    onVoltar: () -> Unit
-) {
+fun CadastroBabaScreen(onVoltar: () -> Unit) {
     val db = FirebaseFirestore.getInstance()
     val storage = FirebaseStorage.getInstance()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val auth = FirebaseAuth.getInstance()
 
     var nome by remember { mutableStateOf("") }
     var idade by remember { mutableStateOf("") }
@@ -97,190 +307,410 @@ fun CadastroBabaScreen(
     var experiencia by remember { mutableStateOf("") }
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     var salvando by remember { mutableStateOf(false) }
-    var sucessoCadastro by remember { mutableStateOf(false) }
 
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        fotoUri = uri
-    }
-
-    LaunchedEffect(sucessoCadastro) {
-        if (sucessoCadastro) {
-            snackbarHostState.showSnackbar("Babá cadastrada com sucesso!")
-            delay(800)
-            onVoltar()
+    val cropLauncher = rememberLauncherForActivityResult(CropImageContract()) { result ->
+        if (result.isSuccessful && result.uriContent != null) {
+            fotoUri = result.uriContent
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { padding ->
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-
-            Text("Cadastro de Babá", style = MaterialTheme.typography.titleLarge)
-
-            if (fotoUri != null) {
-                Image(
-                    painter = rememberAsyncImagePainter(fotoUri),
-                    contentDescription = "Foto da babá",
-                    modifier = Modifier
-                        .size(140.dp)
-                        .clickable { launcher.launch("image/*") },
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                OutlinedButton(onClick = { launcher.launch("image/*") }) {
-                    Text("Selecionar foto")
-                }
-            }
-
-            OutlinedTextField(nome, { nome = it }, label = { Text("Nome") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(idade, { idade = it }, label = { Text("Idade") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(telefone, { telefone = it }, label = { Text("Telefone") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(cidade, { cidade = it }, label = { Text("Cidade") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(experiencia, { experiencia = it }, label = { Text("Experiência") }, modifier = Modifier.fillMaxWidth())
-
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !salvando,
-                onClick = {
-                    salvando = true
-
-                    fun salvarNoFirestore(fotoUrl: String?) {
-                        val babaData = hashMapOf(
-                            "nome" to nome,
-                            "idade" to idade,
-                            "telefone" to telefone,
-                            "cidade" to cidade.trim().lowercase(),
-                            "experiencia" to experiencia,
-                            "fotoUrl" to fotoUrl
-                        )
-
-                        db.collection("babas")
-                            .document(telefone)
-                            .set(babaData)
-                            .addOnSuccessListener {
-                                salvando = false
-                                sucessoCadastro = true
-                            }
-                            .addOnFailureListener {
-                                salvando = false
-                            }
-                    }
-
-                    if (fotoUri != null) {
-                        val ref = storage.reference.child("babas/${UUID.randomUUID()}.jpg")
-                        ref.putFile(fotoUri!!)
-                            .continueWithTask { ref.downloadUrl }
-                            .addOnSuccessListener { salvarNoFirestore(it.toString()) }
-                            .addOnFailureListener { salvando = false }
-                    } else {
-                        salvarNoFirestore(null)
-                    }
-                }
-            ) {
-                if (salvando) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("Cadastrar")
-                }
-            }
-
-            TextButton(onClick = onVoltar) {
-                Text("Voltar")
-            }
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val options = CropImageContractOptions(uri, CropImageOptions().apply {
+                guidelines = CropImageView.Guidelines.ON
+                aspectRatioX = 1
+                aspectRatioY = 1
+                fixAspectRatio = true
+            })
+            cropLauncher.launch(options)
         }
     }
-}
-
-/* ---------------- LISTA ---------------- */
-
-@Composable
-fun ListaBabasScreen(
-    onVoltar: () -> Unit
-) {
-    val db = FirebaseFirestore.getInstance()
-
-    var cidadeBusca by remember { mutableStateOf("") }
-    var babas by remember { mutableStateOf(listOf<Map<String, Any>>()) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Text("Meu Perfil de Babá", style = MaterialTheme.typography.titleLarge)
+
+        Box(
+            modifier = Modifier
+                .size(120.dp)
+                .background(Color.LightGray)
+                .clickable { galleryLauncher.launch("image/*") },
+            contentAlignment = Alignment.Center
+        ) {
+            if (fotoUri != null) {
+                Image(
+                    painter = rememberAsyncImagePainter(fotoUri),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Text("Add Foto", color = Color.DarkGray)
+            }
+        }
 
         OutlinedTextField(
-            value = cidadeBusca,
-            onValueChange = { cidadeBusca = it },
-            label = { Text("Buscar por cidade") },
+            value = nome,
+            onValueChange = { nome = it },
+            label = { Text("Nome Completo") },
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = idade,
+            onValueChange = { idade = it },
+            label = { Text("Idade") },
+            modifier = Modifier.fillMaxWidth()
+        )
 
+        OutlinedTextField(
+            value = telefone,
+            onValueChange = { telefone = it },
+            label = { Text("WhatsApp (com DDD)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        OutlinedTextField(
+            value = cidade,
+            onValueChange = { cidade = it },
+            label = { Text("Cidade") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        OutlinedTextField(
+            value = experiencia,
+            onValueChange = { experiencia = it },
+            label = { Text("Resumo da Experiência") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3
+        )
         Button(
             modifier = Modifier.fillMaxWidth(),
+            enabled = !salvando,
             onClick = {
-                db.collection("babas")
-                    .whereEqualTo("cidade", cidadeBusca.trim().lowercase())
-                    .get()
-                    .addOnSuccessListener { result ->
-                        babas = result.documents.mapNotNull { it.data }
+                val currentUser = auth.currentUser
+
+                if (currentUser != null) {
+
+                    salvando = true
+                    val uid = currentUser.uid
+
+                    fun salvarFirestore(url: String?) {
+                        val dados = hashMapOf(
+                            "uid" to uid,
+                            "nome" to nome,
+                            "telefone" to telefone,
+                            "cidade" to cidade.trim().lowercase(),
+                            "experiencia" to experiencia,
+                            "fotoUrl" to url,
+                            "idade" to idade
+                        )
+
+                        db.collection("babas").document(uid).set(dados)
+                            .addOnSuccessListener { salvando = false }
+                            .addOnFailureListener { salvando = false }
                     }
+
+                    fotoUri?.let { uri ->
+
+                        val ref = storage.reference
+                            .child("fotos_babas/${UUID.randomUUID()}.jpg")
+
+                        ref.putFile(uri)
+                            .continueWithTask { task ->
+                                if (!task.isSuccessful) {
+                                    task.exception?.let { throw it }
+                                }
+                                ref.downloadUrl
+                            }
+                            .addOnSuccessListener { downloadUri ->
+                                salvarFirestore(downloadUri.toString())
+                            }
+                            .addOnFailureListener {
+                                salvando = false
+                                salvarFirestore(null)
+                            }
+
+                    } ?: run {
+                        salvarFirestore(null)
+                    }
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A1B9A))
+        )
+         {
+            if (salvando) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text("Salvar Perfil")
             }
-        ) {
-            Text("Buscar")
         }
 
-        Spacer(Modifier.height(16.dp))
+        TextButton(
+            onClick = {
+                FirebaseAuth.getInstance().signOut()
+                onVoltar()
+            }
+        ) {
+            Text("Voltar", color = Color.Red)
+        }
+    }
+}
 
-        LazyColumn {
-            items(babas) { baba ->
-                Card(
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ListaBabasScreen(onVoltar: () -> Unit) {
+    val db = FirebaseFirestore.getInstance()
+    var cidadeBusca by remember { mutableStateOf("") }
+    var babas by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+    var carregando by remember { mutableStateOf(false) }
+    var buscaRealizada by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Buscar Babá") },
+                navigationIcon = {
+                    IconButton(onClick = onVoltar) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp)
+        ) {
+
+
+            Button(
+                onClick = {
+                    carregando = true
+                    buscaRealizada = true
+                    db.collection("babas")
+                        .whereEqualTo("cidade", cidadeBusca.trim().lowercase())
+                        .get()
+                        .addOnSuccessListener { result ->
+                            babas = result.documents.mapNotNull { doc ->
+                                doc.data?.toMutableMap()?.apply {
+                                    put("id", doc.id)
+                                }
+                            }
+                            carregando = false
+                        }
+                        .addOnFailureListener {
+                            babas = emptyList()
+                            carregando = false
+                        }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                enabled = !carregando && cidadeBusca.isNotBlank()
+            ) {
+                if (carregando) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Buscar")
+                }
+            }
+
+            if (carregando) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            if (buscaRealizada && !carregando && babas.isEmpty()) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 6.dp)
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column {
+                    Text(
+                        "Nenhuma babá encontrada em ${cidadeBusca}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
 
-                        val fotoUrl = baba["fotoUrl"] as? String
-
-                        if (!fotoUrl.isNullOrEmpty()) {
-                            Image(
-                                painter = rememberAsyncImagePainter(fotoUrl),
-                                contentDescription = "Foto da babá",
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(babas) { baba ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                                    .size(80.dp)
+                                    .background(Color.LightGray)
+                            ) {
+                                val fotoUrl = baba["fotoUrl"] as? String
+                                if (!fotoUrl.isNullOrEmpty()) {
+                                    Image(
+                                        painter = rememberAsyncImagePainter(fotoUrl),
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            }
 
-                        Column(Modifier.padding(12.dp)) {
-                            Text("Nome: ${baba["nome"]}")
-                            Text("Idade: ${baba["idade"]}")
-                            Text("Telefone: ${baba["telefone"]}")
-                            Text("Experiência: ${baba["experiencia"]}")
+                            Column(
+                                modifier = Modifier
+                                    .padding(start = 12.dp)
+                                    .weight(1f)
+                            ) {
+                                Text(
+                                    text = baba["nome"]?.toString() ?: "Nome não informado",
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("Cidade: ${baba["cidade"]}")
+
+                                val telefone = baba["telefone"]?.toString() ?: ""
+                                if (telefone.isNotBlank()) {
+                                    Text(
+                                        text = buildAnnotatedString {
+                                            append("WhatsApp: ")
+                                            withStyle(
+                                                style = SpanStyle(
+                                                    color = Color.Blue,
+                                                    textDecoration = TextDecoration.Underline
+                                                )
+                                            ) {
+                                                append(telefone)
+                                            }
+                                        },
+                                        modifier = Modifier.clickable {
+                                            abrirWhatsApp(context, telefone)
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TextButton(onClick = onVoltar) {
-            Text("Voltar")
-        }
     }
+}
+
+// FUNÇÕES AUXILIARES
+fun cadastrarUsuario(
+    email: String,
+    senha: String,
+    tipo: String,
+    onSucesso: () -> Unit,
+    onErro: (String) -> Unit
+) {
+    val auth = FirebaseAuth.getInstance()
+
+    auth.createUserWithEmailAndPassword(email, senha)
+        .addOnSuccessListener { result ->
+            val uid = result.user?.uid
+            if (uid != null) {
+                val dados = hashMapOf(
+                    "email" to email,
+                    "tipo" to tipo
+                )
+
+                FirebaseFirestore.getInstance()
+                    .collection("usuarios")
+                    .document(uid)
+                    .set(dados)
+                    .addOnSuccessListener { onSucesso() }
+                    .addOnFailureListener { onErro("Erro ao salvar usuário") }
+            } else {
+                onErro("Erro ao criar usuário")
+            }
+        }
+        .addOnFailureListener {
+            onErro(it.message ?: "Erro ao criar conta")
+        }
+}
+
+fun fazerLogin(
+    email: String,
+    senha: String,
+    onSucesso: (String) -> Unit,
+    onErro: (String) -> Unit
+) {
+    val auth = FirebaseAuth.getInstance()
+
+    auth.signInWithEmailAndPassword(email, senha)
+        .addOnSuccessListener { result ->
+            result.user?.uid?.let { uid ->
+                onSucesso(uid)
+            } ?: onErro("Erro ao fazer login")
+        }
+        .addOnFailureListener {
+            onErro(it.message ?: "Erro ao fazer login")
+        }
+}
+
+fun verificarTipoUsuario(
+    uid: String,
+    onPai: () -> Unit,
+    onBaba: () -> Unit,
+    onError: (String) -> Unit
+) {
+    Firebase.firestore.collection("usuarios")
+        .document(uid)
+        .get()
+        .addOnSuccessListener { doc ->
+            val tipo = doc.getString("tipo")
+            when (tipo) {
+                "pai" -> onPai()
+                "baba" -> onBaba()
+                else -> onError("Tipo de usuário não identificado")
+            }
+        }
+        .addOnFailureListener {
+            onError(it.message ?: "Erro ao verificar usuário")
+        }
+}
+
+fun abrirWhatsApp(context: android.content.Context, telefone: String) {
+    val digits = telefone.filter { it.isDigit() }
+    val fullNumber = if (digits.startsWith("55")) digits else "55$digits"
+    val message = "Olá, vi seu perfil no BabáFácil!"
+    val encodedMessage = URLEncoder.encode(message, "UTF-8")
+    val uri = Uri.parse("https://wa.me/$fullNumber?text=$encodedMessage")
+
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+    } catch (e: Exception) {
+        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+    }
+}
+
+fun whatsappLinkWithMessage(phone: String, message: String): String {
+    val digits = phone.filter { it.isDigit() }
+    val full = if (digits.startsWith("55")) digits else "55$digits"
+    val encodedMessage = URLEncoder.encode(message, "UTF-8")
+    return "https://wa.me/$full?text=$encodedMessage"
 }
