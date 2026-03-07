@@ -50,19 +50,74 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory
+import com.google.android.play.core.install.InstallStateUpdatedListener
+import com.google.android.play.core.install.model.InstallStatus
+import com.google.android.play.core.install.model.UpdateAvailability
+import com.google.android.play.core.install.model.AppUpdateType
+import com.google.android.material.snackbar.Snackbar
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var appUpdateManager: AppUpdateManager
+
+    private val listener = InstallStateUpdatedListener { state ->
+        if (state.installStatus() == InstallStatus.DOWNLOADED) {
+            popupSnackbarForCompleteUpdate()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         FirebaseApp.initializeApp(this)
+
+        appUpdateManager = AppUpdateManagerFactory.create(this)
+
+        appUpdateManager.appUpdateInfo.addOnSuccessListener { appUpdateInfo ->
+            if (appUpdateInfo.updateAvailability() ==
+                UpdateAvailability.UPDATE_AVAILABLE &&
+                appUpdateInfo.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+            ) {
+                appUpdateManager.startUpdateFlowForResult(
+                    appUpdateInfo,
+                    AppUpdateType.FLEXIBLE,
+                    this,
+                    1001
+                )
+            }
+        }
+
         setContent {
             MaterialTheme {
                 App()
             }
         }
     }
-}
 
+    override fun onResume() {
+        super.onResume()
+        appUpdateManager.registerListener(listener)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        appUpdateManager.unregisterListener(listener)
+    }
+
+    private fun popupSnackbarForCompleteUpdate() {
+        Snackbar.make(
+            findViewById(android.R.id.content),
+            "Atualização pronta!",
+            Snackbar.LENGTH_INDEFINITE
+        ).setAction("Reiniciar") {
+            appUpdateManager.completeUpdate()
+        }.show()
+    }
+    }
 @Composable
 fun App() {
     var telaAtual by remember { mutableStateOf("splash") }
@@ -308,24 +363,50 @@ fun CadastroBabaScreen(onVoltar: () -> Unit) {
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     var salvando by remember { mutableStateOf(false) }
 
-    val cropLauncher = rememberLauncherForActivityResult(CropImageContract()) { result ->
-        if (result.isSuccessful && result.uriContent != null) {
-            fotoUri = result.uriContent
+    val cropLauncher = rememberLauncherForActivityResult(
+        contract = CropImageContract()
+    ) { result ->
+
+        if (result.isSuccessful) {
+            val croppedUri = result.uriContent
+            if (croppedUri != null) {
+                fotoUri = croppedUri
+            }
+        } else {
+            result.error?.printStackTrace()
         }
     }
 
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val context = LocalContext.current
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+
         if (uri != null) {
-            val options = CropImageContractOptions(uri, CropImageOptions().apply {
+
+            val options = CropImageOptions().apply {
                 guidelines = CropImageView.Guidelines.ON
                 aspectRatioX = 1
                 aspectRatioY = 1
                 fixAspectRatio = true
-            })
-            cropLauncher.launch(options)
+
+                cropMenuCropButtonTitle = "Confirmar"
+                cropMenuCropButtonIcon = android.R.drawable.ic_menu_save
+                activityBackgroundColor = android.graphics.Color.WHITE
+
+                outputCompressQuality = 80
+
+                showCropOverlay = true
+                showProgressBar = true
+                allowRotation = false
+                allowFlipping = false
+            }
+
+            val contractOptions = CropImageContractOptions(uri, options)
+            cropLauncher.launch(contractOptions)
         }
     }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -483,7 +564,10 @@ fun ListaBabasScreen(onVoltar: () -> Unit) {
                 title = { Text("Buscar Babá") },
                 navigationIcon = {
                     IconButton(onClick = onVoltar) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Voltar"
+                        )
                     }
                 }
             )
@@ -495,7 +579,18 @@ fun ListaBabasScreen(onVoltar: () -> Unit) {
                 .padding(paddingValues)
                 .padding(16.dp)
         ) {
+        
+            OutlinedTextField(
+                value = cidadeBusca,
+                onValueChange = { cidadeBusca = it },
+                label = { Text("Digite a cidade") },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Ex: São Paulo") },
+                singleLine = true
+            )
 
+            Spacer(modifier = Modifier.height(8.dp))
+            // -------------------------------------------------------
 
             Button(
                 onClick = {
@@ -520,11 +615,13 @@ fun ListaBabasScreen(onVoltar: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp),
-                enabled = !carregando && cidadeBusca.isNotBlank()
+                enabled = !carregando && cidadeBusca.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A1B9A))
             ) {
                 if (carregando) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
+                        color = Color.White,
                         strokeWidth = 2.dp
                     )
                 } else {
